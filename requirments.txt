@@ -1,0 +1,15 @@
+web3
+protobuf==3.19.6
+python-telegram-bot==13.4.1
+sqlalchemy
+apscheduler
+mysql-connector-python
+python-dotenv
+eth-tester
+pydantic
+fastapi
+jinja2
+databases
+asyncpg
+aiomysql
+Pillow

@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>Transfer Tokens</title>
+    <script async src="https://telegram.org/js/telegram-widget.js?7"
+        data-telegram-login="YOUR_BOT_NAME" data-size="large"
+        data-radius="10" data-auth-url="YOUR_AUTH_URL" data-request-access="write"></script>
+    <!-- Include web3.js library -->
+    <script src="https://cdn.jsdelivr.net/npm/web3@1.5.2/dist/web3.min.js"></script>
+</head>
+<body>
+    <h1>Transfer Tokens</h1>
+    <form id="transfer-form" onsubmit="transferTokens(); return false;">
+        <label for="amount">Amount:</label><br>
+        <input type="number" id="amount" name="amount" required>
+        <input type="submit" value="Transfer">
+    </form>
+
+    <!-- Embedded contract details and main.js script -->
+    <script>
+        const contractAddress = "{{ contract_address }}";
+        const contractABI = {{ contract_abi | safe }};
+        const recipientAddress = "{{ wallet_address }}"
+    </script>
+    <script src="{{ url_for('static', path='/main.js') }}"></script>
+</body>
+</html>
