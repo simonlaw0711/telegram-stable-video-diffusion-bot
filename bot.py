@@ -7,7 +7,7 @@ from contextlib import contextmanager
 from apscheduler.schedulers.background import BackgroundScheduler
 from dotenv import load_dotenv
 from web3 import Web3
-import threading
+from threading import Thread
 import logging
 import enum
 import time
@@ -160,7 +160,7 @@ def text_to_image(text_prompt):
         "cfg_scale": 6,
         "samples": 1,
         "style_preset": "cinematic",
-        "text_prompts": [{"text": text_prompt, "weight": 1}, {"text": "bad anatomy, bad hands, three hands, three legs, bad arms, missing legs, missing arms, poorly drawn face, bad face, fused face, cloned face, worst face, three crus, extra crus, fused crus, worst feet, three feet, fused feet, fused thigh, three thigh, fused thigh, extra thigh, worst thigh, missing fingers, extra fingers, ugly fingers, long fingers, horn, extra eyes, huge eyes, 2girl, amputation, disconnected limbs, cartoon, cg, 3d, unreal, animate", "weight": -1}],
+        "text_prompts": [{"text": text_prompt, "weight": 1}, {"text": "bad anatomy, bad hands, three hands, three legs, bad arms, missing legs, missing arms, poorly drawn face, bad face, fused face, cloned face, worst face, three crus, extra crus, fused crus, worst feet, three feet, fused feet, fused thigh, three thigh, fused thigh, extra thigh, worst thigh, missing fingers, extra fingers, ugly fingers, long fingers, horn, extra eyes, huge eyes, 2girl, amputation, disconnected limbs, cartoon, cg, 3d, unreal, animate, ((cameras))", "weight": -1}],
     }
     headers = {
         "Authorization": f"Bearer {os.getenv('STABILITY_API_KEY')}",
@@ -179,7 +179,7 @@ def text_to_image(text_prompt):
 
 def image_to_video(buffer):
     url = "https://api.stability.ai/v2alpha/generation/image-to-video"
-    body = {"seed": 0, "cfg_scale": 2.4, "motion_bucket_id": 106}
+    body = {"seed": 0, "cfg_scale": 2.9, "motion_bucket_id": 156}
     files = {"image": buffer}
     headers = {"Authorization": f"Bearer {os.getenv('STABILITY_API_KEY')}"}
     response = requests.post(url, headers=headers, files=files, data=body)
@@ -202,50 +202,64 @@ def check_video_status(generation_id, chat_id):
         else:
             raise Exception(response.json())
 
+def async_generate(update, context, text_prompt, chat_id, chat_username, conversation_mode):
+    try:
+        image_buffer = text_to_image(text_prompt)
+        
+        if conversation_mode == TXT_TO_IMG:
+            # Assuming this function generates an image and returns a buffer
+            logger.info(f"Sending image to user @{chat_username}")
+            bot.send_message(chat_id=chat_id, text="Sending image, please wait a few secs...")
+            file_path = f"{chat_id}_image.jpg"
+            with open(file_path, 'wb') as file:
+                file.write(image_buffer)
+            with open(file_path, 'rb') as image:
+                bot.send_photo(chat_id=chat_id, photo=image)
+            os.remove(file_path)
+            # Deduct credits
+            deduct_credits(update.effective_user.id, 1)
+        else:
+            # Assuming this function generates a video and returns an ID for status checking
+            logger.info("Generating video...")
+            bot.send_message(chat_id=chat_id, text="Generating video, please wait a few minutes...")
+            video_generation_id = image_to_video(image_buffer)
+            video_content = check_video_status(video_generation_id, chat_id)
+            file_path = f"{chat_id}_video.mp4"
+            with open(file_path, 'wb') as file:
+                file.write(video_content)
+            with open(file_path, 'rb') as video:
+                bot.send_video(chat_id=chat_id, video=video)
+            os.remove(file_path)
+            # Deduct credits
+            deduct_credits(update.effective_user.id, 3)
+        logger.info(f"Generation complete for {update.effective_user.username}!")
+    except Exception as e:
+        logger.error(f"An error occurred: {e}")
+        bot.send_message(chat_id=chat_id, text=f"An error occurred: {e}")
+
 def handle_generation(update: Update, context: CallbackContext) -> None:
     conversation_mode = context.user_data.get('conversation_mode')
     text_prompt = context.user_data.get('prompt')
     logger.info(f"Received prompt: {text_prompt}")
     chat_id = update.effective_chat.id
     chat_username = update.effective_user.username
-    if not text_prompt:
-        text_prompt = update.message.text
-    try:
-        bot.send_message(chat_id=chat_id, text=f"Generating:\n\n<i>{text_prompt}</i>\n\nLet the magic begin 🪄", parse_mode=ParseMode.HTML)
-        image_buffer = text_to_image(text_prompt)
-        context.user_data.pop('prompt', None)
-        if conversation_mode == TXT_TO_IMG:
-            # send the image to the user and end the conversation
-            logger.info(f"Sending image to user @{chat_username}")
-            bot.send_message(chat_id=chat_id, text="Sending image, please wait a few secs...")
-            with open(f"{chat_id}_image.jpg", 'wb') as file:
-                file.write(image_buffer)
-            with open(f"{chat_id}_image.jpg", 'rb') as image:
-                context.bot.send_photo(chat_id=chat_id, photo=image)
-                os.remove(f"{chat_id}_image.jpg")
-            with session_scope() as session:
-                user = session.query(User).filter(User.user_id == update.effective_user.id).first()
-                user.credit -= 1
-                session.commit()
-            get_balance(update, context)
-            return ConversationHandler.END
-        bot.send_message(chat_id=chat_id, text="Generating video, please wait a few minutes...")
-        video_generation_id = image_to_video(image_buffer)
-        video_content = check_video_status(video_generation_id, chat_id)
-        with open(f"{chat_id}_video.mp4", 'wb') as file:
-            file.write(video_content)
-        with open(f"{chat_id}_video.mp4", 'rb') as video:
-            context.bot.send_video(chat_id=chat_id, video=video)
-            os.remove(f"{chat_id}_video.mp4")
-        with session_scope() as session:
-            user = session.query(User).filter(User.user_id == update.effective_user.id).first()
-            user.credit -= 3
-            session.commit()
-    except Exception as e:
-        logger.error(f"An error occurred: {e}")
-        context.bot.send_message(chat_id=chat_id, text=f"An error occurred: {e}")
-    get_balance(update, context)
+
+    # Send initial generation message
+    bot.send_message(chat_id=chat_id, text=f"Generating:\n\n<i>{text_prompt}</i>\n\nLet the magic begin 🪄", parse_mode=ParseMode.HTML)
+    context.user_data.pop('prompt', None)
+
+    # Start the generation process in a separate thread
+    thread = Thread(target=async_generate, args=(update, context, text_prompt, chat_id, chat_username, conversation_mode))
+    thread.start()
+
     return ConversationHandler.END
+
+def deduct_credits(user_id, credits):
+    with session_scope() as session:
+        user = session.query(User).filter(User.user_id == user_id).first()
+        if user:
+            user.credit -= credits
+            session.commit()
 
 # resize any image to 768x768
 def resize_image(image):
@@ -414,7 +428,7 @@ def process_transaction(update: Update, context: CallbackContext) -> None:
             update.message.reply_text("Transaction hash received.\nWe are now verifying your transaction.\nYou will be notified once the verification is complete.", parse_mode=ParseMode.HTML)
 
             # Start the background thread to monitor the transaction
-            thread = threading.Thread(target=monitor_transaction, args=(user_id, txn_hash, update.message.chat_id, wallet_address))
+            thread = Thread(target=monitor_transaction, args=(user_id, txn_hash, update.message.chat_id, wallet_address))
             thread.start()
         else:
             update.message.reply_text("Error: User not found.")
@@ -503,14 +517,20 @@ def handle_prompts_list(update: Update, context: CallbackContext) -> None:
     "a futuristic drone race at sunset on the planet mars",
     "two golden retrievers podcasting on top of a mountain",
     "an instructional cooking session for homemade gnocchi hosted by a grandmother social media influencer set in a rustic Tuscan country kitchen with cinematic lighting",
-    "the camera directly faces colorful buildings in burano italy. An adorable dalmation looks through a window on a building on the ground floor. Many people are walking and cycling along the canal streets in front of the buildings.",
-    "a litter of golden retriever puppies playing in the snow. Their heads pop out of the snow, covered in.",
-    "close-up shot of a chameleon showcases its striking color changing capabilities. The background is blurred, drawing attention to the animal’s striking appearance.",
     "a cat waking up its sleeping owner demanding breakfast. The owner tries to ignore the cat, but the cat tries new tactics and finally the owner pulls out a secret stash of treats from under the pillow to hold the cat off a little longer.",
+    "a man BASE jumping over tropical hawaii waters. His pet macaw flies alongside him",
     "an adorable happy otter confidently stands on a surfboard wearing a yellow lifejacket, riding along turquoise tropical waters near lush tropical islands, 3D digital render art style.",
     "a flock of paper airplanes flutters through a dense jungle, weaving around trees as if they were migrating birds.",
     "a beautiful silhouette animation shows a wolf howling at the moon, feeling lonely, until it finds its pack.",
     "a corgi vlogging itself in tropical Maui.",
+    "A super car driving through city streets at night with heavy rain everywhere, shot from behind the car as it drives",
+    "a tortoise whose body is made of glass, with cracks that have been repaired using kintsugi, is walking on a black sand beach at sunset",
+    "an older man with gray hair and glasses devours a delicious cheese burger. the bun is speckled with sesame seeds, fresh lettuce, a slice of cheese, and a golden brown beef patty. his eyes are closed in enjoyment as he takes a bite",
+    "F1 Race Through San Francisco",
+    "A young professional product reviewer in a well lit video studio is surrounded by gadgets and technology, sitting in front of a computer with two displays. He's holding a cinema camera as he ponders what video to make next. He is in focus",
+    "",
+    "A timelapse closeup of a 3D printer printing a small red cube in an office with dim lighting",
+    "A scuba diver discovers a hidden futuristic shipwreck, with cybernetic marine life and advanced alien technology",
     "new York City submerged like Atlantis. Fish, whales, sea turtles and sharks swim through the streets of New York.",
     "tour of an art gallery with many beautiful works of art in different styles.",
     "a Chinese Lunar New Year celebration video with Chinese Dragon.",

@@ -13,3 +13,4 @@ databases
 asyncpg
 aiomysql
 Pillow
+numpy
