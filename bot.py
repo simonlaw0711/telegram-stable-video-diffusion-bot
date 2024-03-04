@@ -232,6 +232,7 @@ def async_generate(update, context, text_prompt, chat_id, chat_username, convers
             os.remove(file_path)
             # Deduct credits
             deduct_credits(update.effective_user.id, 3)
+        get_balance(update, context)
         logger.info(f"Generation complete for {update.effective_user.username}!")
     except Exception as e:
         logger.error(f"An error occurred: {e}")
@@ -545,19 +546,19 @@ def handle_prompts_list(update: Update, context: CallbackContext) -> None:
 def help_handler(update: Update, context: CallbackContext) -> None:
     message = f"""
 Steps to generate video scenes/images ?
-                
-1. Simply choose module "txt-to-vid" OR "txt-to-img"
-2. Enter the text prompt (a detailed prompt generates better results, /prompts for text prompt examples)
+ 
+1. Simply enter your prompts or pick one using /prompts.
+2. Choose txt-to-vid or txt-to-img
 3. Let the magic begin 🪄
 
 Processing time:
-Txt-to-vid : 2-3 min
+Txt-to-vid : 1-2 min
 Txt-to-img : 20-30 sec
 
 Initial free credits: 30
 Consumption of credits,
 Txt-to-vid : 3 credit pts.
-Txt-to-img : 1 credit pts. 
+Txt-to-img : 1 credit pts.
 """
     update.message.reply_text(message)
 
