@@ -651,10 +651,10 @@ def main() -> None:
     dp.add_handler(CommandHandler("prompts", handle_prompts_list))
     dp.add_handler(CommandHandler("help", help_handler))
     dp.add_handler(CallbackQueryHandler(button))
-    dp.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_prompt, run_async=True))
     dp.add_handler(txt_to_vid_conversation_handler)
     dp.add_handler(txt_to_img_conversation_handler)
     dp.add_handler(buy_conversation_handler)
+    dp.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_prompt, run_async=True))
     # dp.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_generation))
     # Start the Bot
     updater.start_polling()
