@@ -25,6 +25,7 @@ app_wallet_address = os.getenv('APP_WALLET_ADDRESS')
 request = Request(con_pool_size=20)
 bot = Bot(token=os.getenv('BOT_TOKEN'), request=request)
 bot_admin_username = os.getenv('BOT_ADMIN_USERNAME')
+
 # Setup scheduler
 scheduler = BackgroundScheduler()
 scheduler.start()
@@ -36,7 +37,7 @@ logger = logging.getLogger(__name__)
 # Setup Web3
 infura_api_key = os.environ.get('INFURA_API_KEY')
 w3 = Web3(Web3.HTTPProvider(f'https://goerli.infura.io/v3/{infura_api_key}'))
-print(w3.isConnected()) 
+print(w3.isConnected())
 # Your contract details
 with open('abi.json', 'r') as abi_definition:
     contract_abi = json.load(abi_definition)
@@ -84,7 +85,7 @@ class Transaction(Base):
 # Base.metadata.create_all(bind=engine)
 
 # MYSQL Config
-DATABASE_URL = f"mysql+mysqlconnector://{os.getenv('MYSQL_USERNAME')}:{os.getenv('MYSQL_PASSWORD')}@{os.getenv('MYSQL_HOST')}/{os.getenv('MYSQL_DATABASE')}?charset=utf8mb4"  
+DATABASE_URL = f"mysql+mysqlconnector://{os.getenv('MYSQL_USERNAME')}:{os.getenv('MYSQL_PASSWORD')}@{os.getenv('MYSQL_HOST')}/{os.getenv('MYSQL_DATABASE')}?charset=utf8mb4"
 engine = create_engine(DATABASE_URL)
 Base.metadata.create_all(engine)
 
@@ -145,11 +146,15 @@ def get_balance(update: Update, context: CallbackContext) -> None:
             message += "\n\nYour free credit points have exhausted, please use /buy command to buy more credits."
             bot.send_message(chat_id=user_id, text=message)
 
-# Enable logging
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
-logger = logging.getLogger(__name__)
+style_presets = {
+    'a. photographic': 'photographic',
+    'b. 3d-model': '3d-model',
+    'c. neon punk': 'neon punk',
+    'd. origami': 'origami',
+    'e. all': 'all',  # Ensure your API or handling logic can process 'all' accordingly
+}
 
-def text_to_image(text_prompt):
+def text_to_image(text_prompt, style_preset):
     url = "https://api.stability.ai/v1/generation/stable-diffusion-xl-1024-v1-0/text-to-image"
     body = {
         "steps": 40,
@@ -159,7 +164,7 @@ def text_to_image(text_prompt):
         "seed": 0,
         "cfg_scale": 6,
         "samples": 1,
-        "style_preset": "cinematic",
+        "style_preset": style_preset,  # Dynamically set based on user selection
         "text_prompts": [{"text": text_prompt, "weight": 1}, {"text": "bad anatomy, bad hands, three hands, three legs, bad arms, missing legs, missing arms, poorly drawn face, bad face, fused face, cloned face, worst face, three crus, extra crus, fused crus, worst feet, three feet, fused feet, fused thigh, three thigh, fused thigh, extra thigh, worst thigh, missing fingers, extra fingers, ugly fingers, long fingers, horn, extra eyes, huge eyes, 2girl, amputation, disconnected limbs, cartoon, cg, 3d, unreal, animate, ((cameras))", "weight": -1}],
     }
     headers = {
@@ -202,33 +207,29 @@ def check_video_status(generation_id, chat_id):
         else:
             raise Exception(response.json())
 
-def async_generate(update, context, text_prompt, chat_id, chat_username, conversation_mode):
+def async_generate(update, context, text_prompt, chat_id, chat_username, conversation_mode, generation_number, style_preset):
     try:
-        image_buffer = text_to_image(text_prompt)
-        
+        image_buffer = text_to_image(text_prompt, style_preset)
         if conversation_mode == TXT_TO_IMG:
-            # Assuming this function generates an image and returns a buffer
             logger.info(f"Sending image to user @{chat_username}")
-            bot.send_message(chat_id=chat_id, text="Sending image, please wait a few secs...")
-            file_path = f"{chat_id}_image.jpg"
+            file_path = f"{chat_id}_{generation_number}_image.jpg"
             with open(file_path, 'wb') as file:
                 file.write(image_buffer)
             with open(file_path, 'rb') as image:
-                bot.send_photo(chat_id=chat_id, photo=image)
+                bot.send_photo(chat_id=chat_id, photo=image, caption=f"Style: {style_preset}")
             os.remove(file_path)
             # Deduct credits
             deduct_credits(update.effective_user.id, 1)
         else:
             # Assuming this function generates a video and returns an ID for status checking
-            logger.info("Generating video...")
-            bot.send_message(chat_id=chat_id, text="Generating video, please wait a few minutes...")
             video_generation_id = image_to_video(image_buffer)
+            logger.info(f"Generating video {video_generation_id} for @{chat_username}...")
             video_content = check_video_status(video_generation_id, chat_id)
-            file_path = f"{chat_id}_video.mp4"
+            file_path = f"{chat_id}_{generation_number}_video.mp4"
             with open(file_path, 'wb') as file:
                 file.write(video_content)
             with open(file_path, 'rb') as video:
-                bot.send_video(chat_id=chat_id, video=video)
+                bot.send_video(chat_id=chat_id, video=video, caption=f"Style: {style_preset}")
             os.remove(file_path)
             # Deduct credits
             deduct_credits(update.effective_user.id, 3)
@@ -244,15 +245,34 @@ def handle_generation(update: Update, context: CallbackContext) -> None:
     logger.info(f"Received prompt: {text_prompt}")
     chat_id = update.effective_chat.id
     chat_username = update.effective_user.username
+    style_preset = context.user_data.get('style_preset', 'photographic')
 
     # Send initial generation message
-    bot.send_message(chat_id=chat_id, text=f"Generating:\n\n<i>{text_prompt}</i>\n\nLet the magic begin 🪄", parse_mode=ParseMode.HTML)
+    bot.send_message(chat_id=chat_id, text=f"Starting batch generation for:\n\n<i>{text_prompt}\n\nStyle: {style_preset}</i>\n\nLet the magic begin 🪄", parse_mode=ParseMode.HTML)
     context.user_data.pop('prompt', None)
+    if conversation_mode == TXT_TO_IMG:
+        bot.send_message(chat_id=chat_id, text=f"Generating images...")
+    elif conversation_mode == TXT_TO_VID:
+        bot.send_message(chat_id=chat_id, text=f"Generating video...")
 
-    # Start the generation process in a separate thread
-    thread = Thread(target=async_generate, args=(update, context, text_prompt, chat_id, chat_username, conversation_mode))
-    thread.start()
+    threads = []
+    if style_preset == 'all':
+        styles = ['photographic', '3d-model', 'neon-punk', 'origami']
+        for i, style in enumerate(styles, start=1):
+            # Adjust the call to include the specific style
+            thread = Thread(target=async_generate, args=(update, context, text_prompt, chat_id, chat_username, conversation_mode, i, style))
+            thread.start()
+            threads.append(thread)
+    else:
+        for i in range(4):
+            thread = Thread(target=async_generate, args=(update, context, text_prompt, chat_id, chat_username, conversation_mode, i + 1, style_preset))
+            thread.start()
+            threads.append(thread)
 
+    for thread in threads:
+        thread.join()  # Wait for all threads to complete
+
+    bot.send_message(chat_id=chat_id, text="Batch generation complete.")
     return ConversationHandler.END
 
 def deduct_credits(user_id, credits):
@@ -297,20 +317,44 @@ def button(update: Update, context: CallbackContext) -> None:
     query = update.callback_query
     query.answer()
 
-    if query.data == 'txt_to_vid':
-        txt_to_vid_handler(update, context)
-        pass
-    elif query.data == 'txt_to_img':
-        txt_to_img_handler(update, context)
-        pass
-    elif query.data == 'prompt_vid':
-        context.user_data['conversation_mode'] = TXT_TO_VID
-        handle_generation(update, context)
-        pass
-    elif query.data == 'prompt_img':
-        context.user_data['conversation_mode'] = TXT_TO_IMG
-        handle_generation(update, context)
-        pass
+    if query.data.startswith('style_'):
+        # Map callback data to style presets
+        style_presets = {
+            'style_photographic': 'photographic',
+            'style_3dmodel': '3d-model',
+            'style_neonpunk': 'neon-punk',
+            'style_origami': 'origami',
+            'style_all': 'all',
+        }
+        selected_style = style_presets.get(query.data, 'photographic')  # Default to 'photographic'
+        context.user_data['style_preset'] = selected_style
+        
+        return handle_generation(update, context)
+    
+    elif query.data in ['prompt_vid', 'prompt_img']:
+        conversation_mode = TXT_TO_VID if query.data == 'prompt_vid' else TXT_TO_IMG
+        context.user_data['conversation_mode'] = conversation_mode
+
+        # Insert style selection step here
+        keyboard = [
+            [InlineKeyboardButton("Photographic", callback_data='style_photographic')],
+            [InlineKeyboardButton("3D-Model", callback_data='style_3dmodel')],
+            [InlineKeyboardButton("Neon Punk", callback_data='style_neonpunk')],
+            [InlineKeyboardButton("Origami", callback_data='style_origami')],
+            [InlineKeyboardButton("All", callback_data='style_all')],
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        context.bot.send_message(chat_id=query.message.chat_id, text="Please select a style for your generation:", reply_markup=reply_markup)
+
+def ask_style_selection(update, context):
+    reply_keyboard = [['a. Photographic', 'b. 3D-Model'], ['c. Neon Punk', 'd. Origami', 'e. All']]
+    update.message.reply_text(
+        'Please choose a style for your generation:',
+        reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True, resize_keyboard=True),
+    )
+    return STYLE_SELECTION  # Ensure this constant is correctly defined in your states
+
+
 
 def txt_to_img_handler(update, context):
     with session_scope() as session:
@@ -321,7 +365,7 @@ def txt_to_img_handler(update, context):
         else:
             context.user_data['conversation_mode'] = TXT_TO_IMG
             context.bot.send_message(chat_id=update.effective_chat.id, text="Please enter a text prompt to generate a image.\nOr type `/cancel` to cancel the operation.")
-            return TXT_TO_IMG
+            return ask_style_selection(update, context)
 
 def txt_to_vid_handler(update, context):
     with session_scope() as session:
@@ -333,7 +377,7 @@ def txt_to_vid_handler(update, context):
             else:
                 context.user_data['conversation_mode'] = TXT_TO_VID
                 context.bot.send_message(chat_id=update.effective_chat.id, text="Please enter a text prompt to generate a video.\nOr type /cancel to cancel the operation.")
-                return TXT_TO_VID
+                return ask_style_selection(update, context)
         else:
             context.bot.send_message(chat_id=update.effective_chat.id, text="Please use /start command to create an account first.")
             return ConversationHandler.END
@@ -381,7 +425,7 @@ https://
 def process_wallet_address(update: Update, context: CallbackContext) -> int:
     wallet_address = update.message.text
     user_id = update.effective_user.id
-    
+
     with session_scope() as session:
         user = session.query(User).filter(User.user_id == user_id).first()
         if user:
@@ -396,17 +440,17 @@ def process_wallet_address(update: Update, context: CallbackContext) -> int:
                 update.message.reply_text(f"Updated wallet address to <code>{wallet_address}</code>", parse_mode=ParseMode.HTML)
                 user.wallet_address = wallet_address
                 session.commit()
-                context.user_data['wallet_address'] = wallet_address 
+                context.user_data['wallet_address'] = wallet_address
 
             update.message.reply_text(f"Price List for credits:\n100 tokens = 1 credit point\n500 tokens = 6\n1000 tokens = 13\n5000 tokens = 70\n10000 tokens = 150\n\nSend the token to this address: <code>{app_wallet_address}</code>\nThen send your transaction's txn hash to confirm the deposit.\nCredit will be released once the confirmation is done\nOr use <a>/cancel</a> to cancel the operation.", parse_mode=ParseMode.HTML)
-            return TXN_HASH 
+            return TXN_HASH
         else:
             update.message.reply_text("Error: User not found.")
             return ConversationHandler.END
 
 def process_transaction(update: Update, context: CallbackContext) -> None:
     user_id = update.effective_user.id
-    wallet_address = context.user_data.get('wallet_address')  
+    wallet_address = context.user_data.get('wallet_address')
     txn_hash = update.message.text
 
     # Check if wallet_address is available
@@ -452,7 +496,7 @@ def monitor_transaction(user_id, txn_hash, chat_id, wallet_address):
                 time.sleep(60)
                 attempts += 1
                 continue
-            
+
             if receipt['from'].lower() != wallet_address.lower():
                 bot.send_message(chat_id=chat_id, text=f"The transaction did not come from the expected address. Please check your inputs and try again.")
                 return
@@ -476,7 +520,7 @@ def monitor_transaction(user_id, txn_hash, chat_id, wallet_address):
                             if user:
                                 user.credit += credits
                                 session.commit()
-                                
+
                             # Update the transaction record to "Confirmed"
                             transaction = session.query(Transaction).filter(Transaction.txn_hash == txn_hash).first()
                             if transaction:
@@ -524,12 +568,12 @@ def handle_prompts_list(update: Update, context: CallbackContext) -> None:
     "a flock of paper airplanes flutters through a dense jungle, weaving around trees as if they were migrating birds.",
     "a beautiful silhouette animation shows a wolf howling at the moon, feeling lonely, until it finds its pack.",
     "a corgi vlogging itself in tropical Maui.",
+    "Doge admiring the price rise of Bitcoin, super cartoon, 3d , 4k quality"
     "A super car driving through city streets at night with heavy rain everywhere, shot from behind the car as it drives",
     "a tortoise whose body is made of glass, with cracks that have been repaired using kintsugi, is walking on a black sand beach at sunset",
     "an older man with gray hair and glasses devours a delicious cheese burger. the bun is speckled with sesame seeds, fresh lettuce, a slice of cheese, and a golden brown beef patty. his eyes are closed in enjoyment as he takes a bite",
     "F1 Race Through San Francisco",
     "A young professional product reviewer in a well lit video studio is surrounded by gadgets and technology, sitting in front of a computer with two displays. He's holding a cinema camera as he ponders what video to make next. He is in focus",
-    "",
     "A timelapse closeup of a 3D printer printing a small red cube in an office with dim lighting",
     "A scuba diver discovers a hidden futuristic shipwreck, with cybernetic marine life and advanced alien technology",
     "new York City submerged like Atlantis. Fish, whales, sea turtles and sharks swim through the streets of New York.",
@@ -546,7 +590,7 @@ def handle_prompts_list(update: Update, context: CallbackContext) -> None:
 def help_handler(update: Update, context: CallbackContext) -> None:
     message = f"""
 Steps to generate video scenes/images ?
- 
+
 1. Simply enter your prompts or pick one using /prompts.
 2. Choose txt-to-vid or txt-to-img
 3. Let the magic begin 🪄
@@ -600,32 +644,8 @@ def cancel(update: Update, context: CallbackContext) -> int:
 
     return ConversationHandler.END
 
-TXT_TO_IMG = 1
-TXT_TO_VID = 2
+STYLE_SELECTION, TXT_TO_IMG, TXT_TO_VID = range(3) 
 WALLET_ADDRESS, TXN_HASH = range(2)
-txt_to_img_conversation_handler = ConversationHandler(
-    entry_points=[
-        CallbackQueryHandler(txt_to_img_handler, pattern='txt_to_img'),
-        CommandHandler('txt_to_img', txt_to_img_handler)    
-    ],
-    states={
-        TXT_TO_IMG: [MessageHandler(Filters.text & ~Filters.command, handle_generation)],
-    },
-    fallbacks=[CommandHandler('cancel', cancel)],
-    run_async=True
-)
-
-txt_to_vid_conversation_handler = ConversationHandler(
-    entry_points=[
-        CallbackQueryHandler(txt_to_vid_handler, pattern='txt_to_vid'),
-        CommandHandler('txt_to_vid', txt_to_vid_handler)  
-    ],
-    states={
-        TXT_TO_VID: [MessageHandler(Filters.text & ~Filters.command, handle_generation)],
-    },
-    fallbacks=[CommandHandler('cancel', cancel)],
-    run_async=True
-)
 
 buy_conversation_handler = ConversationHandler(
     entry_points=[CommandHandler('buy', buy)],
@@ -651,8 +671,6 @@ def main() -> None:
     dp.add_handler(CommandHandler("prompts", handle_prompts_list))
     dp.add_handler(CommandHandler("help", help_handler))
     dp.add_handler(CallbackQueryHandler(button))
-    dp.add_handler(txt_to_vid_conversation_handler)
-    dp.add_handler(txt_to_img_conversation_handler)
     dp.add_handler(buy_conversation_handler)
     dp.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_prompt, run_async=True))
     # dp.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_generation))
